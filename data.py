@@ -10,14 +10,14 @@ from PIL import Image
 
 class DataGenerator(keras.utils.Sequence) :
   
-    def __init__(self, image_filenames, boxes, labels, type, batch_size, has_boxes=True,dataset=config.DATASET_DIR) :
-        # pass complete data during India
-        self.type = type
+    def __init__(self, image_filenames, boxes, labels, type, batch_size, has_boxes=0,dataset=config.DATASET_DIR) :
+        # pass complete data during init
+        self.type = type # which folder to open
         self.image_filenames = image_filenames
-        self.boxes = boxes
-        self.labels = labels
+        self.boxes = boxes # bounding boxes
+        self.labels = labels # classes
         self.batch_size = batch_size
-        self.has_boxes = has_boxes
+        self.has_boxes = has_boxes # badly named mode select for using different datasets
         self.dataset = dataset
         
     def __len__(self) :
@@ -25,22 +25,27 @@ class DataGenerator(keras.utils.Sequence) :
     
     
     def __getitem__(self, idx) :
+        # selecting batch wise
         batch_x = self.image_filenames[idx * self.batch_size : (idx+1) * self.batch_size]
         batch_y_labels = self.labels[idx * self.batch_size : (idx+1) * self.batch_size]
-        if self.has_boxes:
-            batch_y_boxes = self.boxes[idx * self.batch_size : (idx+1) * self.batch_size]
 
-            # Targets = {
-            #     "class_label": batch_y_labels.astype(int),
-            #     "bounding_box": batch_y_boxes}
-            #     "prob":batch_y_labels.any(axis=1)}
-            Targets = pd.concat([batch_y_labels.any(axis=1).astype(int),batch_y_labels],axis = 1).to_numpy()
+        # bounding box, objectness and class labels
+        if self.has_boxes == 0:
+            batch_y_boxes = self.boxes[idx * self.batch_size : (idx+1) * self.batch_size]
+            Targets = {
+                "class_label": batch_y_labels.astype(int),
+                "bounding_box": batch_y_boxes,
+                "prob":batch_y_labels.any(axis=1).astype(int).to_numpy().reshape(-1,1)}  
+        
+        # objectness and class labels
+        elif self.has_boxes == 1:
+            Targets = {
+                "class_label": batch_y_labels,
+                "prob":batch_y_labels.any(axis=1).to_numpy().reshape(-1,1)}  
+
+        # class labels
         else :
             Targets = batch_y_labels
-        
-        
-        # construct a second dictionary, this one for our target testing
-        # outputs
        
         return np.array([
                 resize(imread(os.path.join(self.dataset,self.type, str(file_name))), config.IMAGE_DIM)
@@ -80,14 +85,22 @@ def get_data(type,ohe=None,dataset= config.DATASET_DIR):
 
     return f_name,box,labels    
 
+def get_class_data(type,has_boxes=2):
+    dataset = '/home/onu/ml/Dataset'
+    df = pd.read_csv(os.path.join(dataset,type,"_classes.csv"))
+    f,_,labels = get_data(type,dataset="/home/onu/ml/Rock-Paper-Scissors-SXSW-2")
+    df3 = pd.DataFrame(pd.concat([f,labels],axis = 1).values,columns=df.columns)
+    df = pd.concat([df,df3],axis = 0)
+    return DataGenerator(df.iloc[:,0],None,df.iloc[:,1:4].astype(int),type,config.BATCH_SIZE,has_boxes=has_boxes,dataset=dataset)
+
 def start_video_eval(model,ohe,has_boxes=False):
 
     video = cv2.VideoCapture(0)
-    
+    key = 122
     while True:
         _, frame = video.read()
-        #Convert the captured frame into RGB
-        im = Image.fromarray(frame, 'RGB')
+        im = Image.fromarray(frame)
+
         h,w,_ = frame.shape
         font = cv2.FONT_HERSHEY_SIMPLEX
         fontScale = 1
@@ -104,30 +117,32 @@ def start_video_eval(model,ohe,has_boxes=False):
         # #So changing dimension 224x224x3 into 1x128x128x3 
         img_array = np.expand_dims(img_array, axis=0)
 
-        # #Calling the predict method on model to predict 'me' on the image
-        prediction = model.predict(img_array)
-        if has_boxes:
+
+        # #Calling the predict method on model to predict 
+        prediction = model.predict(img_array,verbose=0)
+        if has_boxes==0:
+
             # this is test
-            box = prediction['bounding_box']
-            t = prediction('class_label')
-            frame = cv2.rectangle(frame,(int(box[0]*w),int(box[1]*h)) ,(int(box[2]*w),int(box[3]*h)) , color, thickness)
-            
-  
-            # org
-            org = (int(box[0]*w),int(box[1]*h))
-            
-            
-            # Using cv2.putText() method
-            frame = cv2.putText(frame, ohe.inverse_transform(t)[0][0], org, font, 
-                            fontScale, color, thickness, cv2.LINE_AA)
+            prob, box , t = prediction
+            prob, box = prob[0],box[0]
+            if prob[0] > 0.7:
+                frame = cv2.rectangle(frame,(int(box[0]*w),int(box[1]*h)) ,(int(box[2]*w),int(box[3]*h)) , color, thickness)
+                
+    
+                # org
+                org = (int(box[0]*w),int(box[1]*h))
+                
+                
+                # Using cv2.putText() method
+                frame = cv2.putText(frame, ohe.inverse_transform(t)[0][0], org, font, 
+                                fontScale, color, thickness, cv2.LINE_AA)
    
         else :
-            t = prediction
+            t = prediction 
             org = ((20,20))
             cv2.putText(frame, ohe.inverse_transform(t)[0][0], org, font, 
                             fontScale, color, thickness, cv2.LINE_AA)
 
-        print()
 
         cv2.imshow("Capturing", frame)
         key=cv2.waitKey(1)
@@ -136,5 +151,3 @@ def start_video_eval(model,ohe,has_boxes=False):
     
     video.release()
     cv2.destroyAllWindows()
-
-
